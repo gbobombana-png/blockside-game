@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/piAuth.js';
-import { db } from '../db/store.js';
+import { db, PLATFORM_FEE } from '../db/store.js';
 
 const router = Router();
 const PI_API_BASE = process.env.PI_API_BASE || 'https://api.minepi.com/v2';
@@ -25,6 +25,39 @@ const ITEM_EFFECTS = {
   },
   neon_skin_pack: (save) => {
     save.ownedSkins = [...new Set([...(save.ownedSkins||['default']), 'neon', 'void', 'fire'])];
+  },
+  neon_100:  (save) => { save.neonBalance = (save.neonBalance || 0) + 100; },
+  neon_500:  (save) => { save.neonBalance = (save.neonBalance || 0) + 550; },
+  neon_1500: (save) => { save.neonBalance = (save.neonBalance || 0) + 1800; },
+  neon_5000: (save) => { save.neonBalance = (save.neonBalance || 0) + 7500; },
+  nft_founder: (save, uid, txid) => {
+    if (!save.nftOwned) save.nftOwned = [];
+    if (!save.nftOwned.find(n => n.nftId === 'nft_founder')) {
+      const tokenId = `BLK-NFT-FOUNDER-${uid.slice(0,6).toUpperCase()}-${txid.slice(-8).toUpperCase()}`;
+      save.nftOwned.push({ nftId: 'nft_founder', tokenId, mintedAt: Date.now(), txid });
+    }
+  },
+  nft_legend: (save, uid, txid) => {
+    if (!save.nftOwned) save.nftOwned = [];
+    if (!save.nftOwned.find(n => n.nftId === 'nft_legend')) {
+      const tokenId = `BLK-NFT-LEGEND-${uid.slice(0,6).toUpperCase()}-${txid.slice(-8).toUpperCase()}`;
+      save.nftOwned.push({ nftId: 'nft_legend', tokenId, mintedAt: Date.now(), txid });
+    }
+  },
+  nft_dragon: (save, uid, txid) => {
+    if (!save.nftOwned) save.nftOwned = [];
+    if (!save.nftOwned.find(n => n.nftId === 'nft_dragon')) {
+      const tokenId = `BLK-NFT-DRAGON-${uid.slice(0,6).toUpperCase()}-${txid.slice(-8).toUpperCase()}`;
+      save.nftOwned.push({ nftId: 'nft_dragon', tokenId, mintedAt: Date.now(), txid });
+      save.ownedSkins = [...new Set([...(save.ownedSkins||['default']), 'dragon'])];
+    }
+  },
+  nft_city: (save, uid, txid) => {
+    if (!save.nftOwned) save.nftOwned = [];
+    if (!save.nftOwned.find(n => n.nftId === 'nft_city')) {
+      const tokenId = `BLK-NFT-CITY-${uid.slice(0,6).toUpperCase()}-${txid.slice(-8).toUpperCase()}`;
+      save.nftOwned.push({ nftId: 'nft_city', tokenId, mintedAt: Date.now(), txid });
+    }
   },
 };
 
@@ -91,10 +124,48 @@ router.post('/complete', authMiddleware, async (req, res) => {
     // Marque le paiement comme complété
     db.markPaymentComplete(paymentId, txid);
 
-    // Applique l'effet de l'item sur la sauvegarde cloud du joueur
+    // Paiement d'enchère NFT gagnée
+    if (record.itemId && record.itemId.startsWith('nft_auction_')) {
+      const auctionId = record.itemId.replace('nft_auction_', '');
+      const auction = db.getAuction(auctionId);
+      if (!auction) return res.status(404).json({ error: 'Enchère introuvable' });
+      if (auction.status === 'sold') return res.json({ completed: true, alreadyDone: true });
+      if (auction.currentBidder !== req.piUser.uid) return res.status(403).json({ error: 'Tu n\'es pas le gagnant de cette enchère' });
+
+      // Transférer le NFT
+      const sellerSave = db.getSave(auction.sellerUid) || {};
+      const buyerSave  = db.getSave(req.piUser.uid) || {};
+      const nftIndex = (sellerSave.nftOwned||[]).findIndex(n => n.nftId === auction.nftId && n.tokenId === auction.tokenId);
+      if (nftIndex !== -1) {
+        const [nftRecord] = sellerSave.nftOwned.splice(nftIndex, 1);
+        // Retirer le flag d'enchère du NFT vendeur
+        if (!buyerSave.nftOwned) buyerSave.nftOwned = [];
+        buyerSave.nftOwned.push({ ...nftRecord, listed: false, listingPrice: 0, auctionId: null, boughtAt: Date.now(), boughtFrom: auction.sellerUid });
+        db.upsertSave(auction.sellerUid, sellerSave);
+      }
+      db.upsertSave(req.piUser.uid, buyerSave);
+
+      // Créditer le vendeur (90% du prix final en NEON, plateforme garde 10%)
+      const sellerShare = 1 - PLATFORM_FEE;
+      const sellerNeon = Math.floor(auction.currentBid * 1000 * sellerShare);
+      sellerSave.neonBalance = (sellerSave.neonBalance || 0) + sellerNeon;
+      db.upsertSave(auction.sellerUid, sellerSave);
+
+      db.markAuctionSold(auctionId, req.piUser.uid, txid);
+      return res.json({
+        completed: true,
+        auction: true,
+        nftId: auction.nftId,
+        finalPrice: auction.currentBid,
+        sellerNeon,
+        platformFee: PLATFORM_FEE,
+      });
+    }
+
+    // Item standard
     const save = db.getSave(req.piUser.uid) || {};
     const applyEffect = ITEM_EFFECTS[record.itemId];
-    if (applyEffect) applyEffect(save);
+    if (applyEffect) applyEffect(save, req.piUser.uid, txid);
     db.upsertSave(req.piUser.uid, save);
 
     res.json({ completed: true, payment: piData, itemApplied: record.itemId });

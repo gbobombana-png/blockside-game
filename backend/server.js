@@ -9,6 +9,7 @@ import paymentsRoutes   from './routes/payments.js';
 import saveRoutes       from './routes/savegame.js';
 import leaderboardRoutes from './routes/leaderboard.js';
 import eventsRoutes     from './routes/events.js';
+import nftRoutes        from './routes/nft.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -16,7 +17,7 @@ const PORT = process.env.PORT || 3001;
 // ── Sécurité de base ──────────────────────────────────────────
 app.use(helmet());
 
-const defaultOrigins = 'http://localhost:3000,http://localhost:5173,http://127.0.0.1:5500,https://gbobombana-png.github.io';
+const defaultOrigins = 'http://localhost:3000,http://localhost:5173,http://127.0.0.1:5500,https://gbobombana-png.github.io/blockside-game';
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || defaultOrigins).split(',').map(o => o.trim());
 app.use(cors({
   origin: (origin, cb) => {
@@ -51,6 +52,7 @@ app.use('/api/payments',    paymentsRoutes);
 app.use('/api/save',        saveLimiter, saveRoutes);
 app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/events',      eventsRoutes);
+app.use('/api/nft',         nftRoutes);
 
 // ── Healthcheck ───────────────────────────────────────────────
 app.get('/health', (req, res) => {
